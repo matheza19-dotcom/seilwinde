@@ -19,8 +19,9 @@ h2{font-size:16px;margin:6px 0 0}
 button{font:inherit;border:2px solid var(--line);background:var(--card);color:var(--fg);border-radius:12px;cursor:pointer;touch-action:manipulation}
 button:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
 button:disabled{opacity:.45}
-#conn{padding:14px;font-weight:600;font-size:18px}
+#conn,#prog{padding:14px;font-weight:600;font-size:18px}
 #conn.on{border-color:var(--acc);color:var(--acc)}
+#prog.on{border-color:var(--stop);color:var(--stop)}
 #go{min-height:84px;font-size:28px;font-weight:700}
 #go.run{background:var(--stop);border-color:var(--stop);color:#fff}
 .row{display:grid;gap:4px}
@@ -30,7 +31,6 @@ button:disabled{opacity:.45}
 .row button{min-height:52px;font-size:16px;font-weight:600;padding:0}
 .row button.sel{background:var(--acc);border-color:var(--acc);color:var(--bg)}
 small{color:var(--mut);text-align:center}
-#disc{padding:12px;font-weight:600}
 #confirm{border:2px solid var(--stop);border-radius:12px;padding:12px;text-align:center}
 #confirm[hidden]{display:none}
 .crow{display:flex;gap:8px;margin-top:10px}
@@ -42,7 +42,15 @@ small{color:var(--mut);text-align:center}
 <main>
   <h1>Schlangenbeschwörer</h1>
   <button id="conn">Mit Hub verbinden</button>
+  <div id="confirm" hidden>
+    <div>Verbindung wirklich trennen? Der Motor wird vorher gestoppt.</div>
+    <div class="crow">
+      <button id="yes">Ja, trennen</button>
+      <button id="no">Abbrechen</button>
+    </div>
+  </div>
   <div id="status">Nicht verbunden</div>
+  <button id="prog" disabled>Programm starten</button>
   <button id="go" disabled>Start</button>
   <h2>Geschwindigkeit <small>(− runter · + hoch · 0 aus)</small></h2>
   <div class="row" id="speed"></div>
@@ -50,38 +58,49 @@ small{color:var(--mut);text-align:center}
   <div class="row" id="wave"></div>
   <h2>Wellentempo</h2>
   <div class="row" id="tempo"></div>
-  <button id="disc" disabled>Gerät trennen</button>
-  <div id="confirm" hidden>
-    <div id="ctext">Wirklich trennen? Der Motor wird vorher gestoppt.</div>
-    <div class="crow">
-      <button id="yes">Ja, trennen</button>
-      <button id="no">Abbrechen</button>
-    </div>
-  </div>
-  <small>Das Programm „seilwinde" muss auf dem Hub laufen.</small>
+  <small>„Programm starten" startet das auf dem Hub gespeicherte Programm „seilwinde" ohne die große Taste.</small>
 </main>
 <script>
 const SVC="c5f50001-8280-46da-89f4-6d8051e4aeef", CHR="c5f50002-8280-46da-89f4-6d8051e4aeef";
-let ch=null, device=null, running=false, level=0, wave=0, tempo=3;
+let ch=null, device=null, running=false, progOn=false, level=0, wave=0, tempo=3;
 const $=id=>document.getElementById(id);
 const st=t=>$("status").textContent=t;
+const chr=(base,v)=>String.fromCharCode(base+v);
 
 let queue=Promise.resolve();
-function send(c){
+function sendRaw(bytes){
   queue=queue.then(async()=>{
     if(!ch) return;
-    try{ await ch.writeValueWithResponse(new Uint8Array([0x06,c.charCodeAt(0)])); }
+    try{ await ch.writeValueWithResponse(new Uint8Array(bytes)); }
     catch(e){ st("Senden fehlgeschlagen: "+e.message); }
   });
 }
-$("disc").onclick=()=>{$("confirm").hidden=false};
-$("no").onclick=()=>{$("confirm").hidden=true};
-$("yes").onclick=async()=>{
-  $("confirm").hidden=true;
-  send("s");
-  await queue;
-  if(device&&device.gatt.connected) device.gatt.disconnect();
-};
+function send(c){ sendRaw([0x06,c.charCodeAt(0)]); }
+function pushSettings(){ send("s"); send(chr(97,wave)); send(chr(64,tempo)); }
+
+function updateGo(){
+  $("go").textContent=running?"Stopp":"Start";
+  $("go").classList.toggle("run",running);
+}
+function updateProg(on){
+  progOn=on;
+  $("prog").textContent=on?"Programm beenden":"Programm starten";
+  $("prog").classList.toggle("on",on);
+}
+function enable(on){
+  document.querySelectorAll(".row button,#go,#prog").forEach(b=>b.disabled=!on);
+}
+function applyMotor(){
+  if(running && level!==0){
+    send(String(Math.abs(level)));
+    send(level>0?"+":"-");
+  }else{
+    send("s");
+  }
+}
+function mark(id,val){
+  [...$(id).children].forEach(b=>b.classList.toggle("sel",Number(b.dataset.v)===Number(val)));
+}
 function makeRow(id,values,get,set){
   const row=$(id);
   values.forEach(v=>{
@@ -92,50 +111,76 @@ function makeRow(id,values,get,set){
   });
   mark(id,get());
 }
-function mark(id,val){
-  [...$(id).children].forEach(b=>b.classList.toggle("sel",Number(b.dataset.v)===Number(val)));
-}
-function enable(on){
-  document.querySelectorAll(".row button,#go,#disc").forEach(b=>b.disabled=!on);
-}
-function applyMotor(){
-  if(running && level!==0){
-    send(String(Math.abs(level)));
-    send(level>0?"+":"-");
-  }else{
-    send("s");
-  }
-}
-function updateGo(){
-  $("go").textContent=running?"Stopp":"Start";
-  $("go").classList.toggle("run",running);
-}
 makeRow("speed",[-5,-4,-3,-2,-1,0,1,2,3,4,5],()=>level,v=>{level=v;applyMotor()});
-makeRow("wave",[0,1,2,3,4,5],()=>wave,v=>{wave=v;send(String.fromCharCode(97+v))});
-makeRow("tempo",[1,2,3,4,5],()=>tempo,v=>{tempo=v;send(String.fromCharCode(64+v))});
+makeRow("wave",[0,1,2,3,4,5],()=>wave,v=>{wave=v;send(chr(97,v))});
+makeRow("tempo",[1,2,3,4,5],()=>tempo,v=>{tempo=v;send(chr(64,v))});
 
-$("go").onclick=()=>{
-  running=!running;updateGo();applyMotor();
+$("go").onclick=()=>{running=!running;updateGo();applyMotor()};
+
+$("prog").onclick=()=>{
+  if(!progOn){
+    st("Starte Programm …");
+    running=false;updateGo();
+    sendRaw([0x01]);
+    queue=queue.then(()=>new Promise(r=>setTimeout(r,1500)));
+    pushSettings();
+    updateProg(true);
+    queue=queue.then(()=>st("Programm gestartet"));
+  }else{
+    running=false;updateGo();
+    send("s");
+    sendRaw([0x00]);
+    updateProg(false);
+    queue=queue.then(()=>st("Programm beendet"));
+  }
 };
 
+// Ein Knopf zum Verbinden und Trennen
 $("conn").onclick=async()=>{
+  if(ch){ $("confirm").hidden=false; return; }
   if(!navigator.bluetooth){st("Dieser Browser kann kein Web Bluetooth. Öffne die Seite in Bluefy.");return}
   var step="Auswahl";
   try{
     const dev=await navigator.bluetooth.requestDevice({filters:[{services:[SVC]}]});
     device=dev;
-    dev.addEventListener("gattserverdisconnected",()=>{ch=null;running=false;updateGo();enable(false);$("confirm").hidden=true;$("conn").classList.remove("on");$("conn").textContent="Mit Hub verbinden";st("Verbindung getrennt")});
+    dev.addEventListener("gattserverdisconnected",()=>{
+      ch=null;running=false;updateGo();updateProg(false);enable(false);
+      $("confirm").hidden=true;
+      $("conn").classList.remove("on");$("conn").textContent="Mit Hub verbinden";
+      st("Verbindung getrennt");
+    });
     step="Verbinden";st(step+" …");
     const srv=await dev.gatt.connect();
     step="Dienst suchen";st(step+" …");
     const svc=await srv.getPrimaryService(SVC);
     step="Kanal suchen";st(step+" …");
-    ch=await svc.getCharacteristic(CHR);
-    try{await ch.startNotifications();}catch(e){}
-    enable(true);$("conn").classList.add("on");$("conn").textContent="Verbunden: "+(dev.name||"Hub");
+    const c=await svc.getCharacteristic(CHR);
+    // Statusmeldungen des Hubs lesen (zeigt, ob das Programm läuft)
+    c.addEventListener("characteristicvaluechanged",e=>{
+      const v=e.target.value;
+      if(v.byteLength>=5 && v.getUint8(0)===0){
+        const läuft=(v.getUint32(1,true)&64)!==0;
+        if(läuft!==progOn){
+          updateProg(läuft);
+          if(läuft) setTimeout(pushSettings,1500);
+        }
+      }
+    });
+    try{await c.startNotifications();}catch(e){}
+    ch=c;
+    enable(true);
+    $("conn").classList.add("on");
+    $("conn").textContent="Verbunden: "+(dev.name||"Hub")+" – trennen";
     st("Bereit");
-    send("s");send(String.fromCharCode(97+wave));send(String.fromCharCode(64+tempo));
+    pushSettings();
   }catch(e){st("Fehler ("+step+"): "+e.name+" – "+e.message)}
+};
+$("no").onclick=()=>{$("confirm").hidden=true};
+$("yes").onclick=async()=>{
+  $("confirm").hidden=true;
+  send("s");
+  await queue;
+  if(device&&device.gatt.connected) device.gatt.disconnect();
 };
 </script>
 </body>
